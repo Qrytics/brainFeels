@@ -19,6 +19,27 @@
         box-sizing: border-box;
         padding: 6px 8px;
       }
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .toggle-row input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        cursor: pointer;
+      }
+      .toggle-row label {
+        margin: 0;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .toggle-desc {
+        font-size: 11px;
+        color: #666;
+        margin: 2px 0 0 24px;
+      }
       p {
         margin: 10px 0 0;
         font-size: 12px;
@@ -33,6 +54,15 @@
   <body>
     <label for="serverUrl">Local BrainFeels server</label>
     <input id="serverUrl" type="url" placeholder="http://127.0.0.1:8765" />
+
+    <div class="toggle-row">
+      <input id="mosaicEnabled" type="checkbox" />
+      <label for="mosaicEnabled">YouTube Thumbnail Emotion Mosaic</label>
+    </div>
+    <p class="toggle-desc">
+      Overlays a color-coded emotion mosaic on YouTube thumbnails while you browse.
+    </p>
+
     <button id="save" type="button">Save</button>
     <p id="status"></p>
     <p>

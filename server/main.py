@@ -6,15 +6,18 @@ TRIBE v2 predicts fMRI-like cortical responses; it does not measure real brains 
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import tempfile
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -94,6 +97,92 @@ def _run_tribe(video_path: Path, cache_folder: Path) -> np.ndarray:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models for thumbnail analysis
+# ---------------------------------------------------------------------------
+
+class ThumbnailAnalysisRequest(BaseModel):
+    """Request body for the /analyze-thumbnail endpoint."""
+
+    thumbnail_url: str
+    grid_rows: int = 3
+    grid_cols: int = 4
+
+
+def _is_safe_thumbnail_url(url: str) -> bool:
+    """
+    Return True only for public HTTP(S) URLs.
+
+    Rejects non-HTTP(S) schemes and any URL whose hostname resolves to a
+    private, loopback, link-local, or reserved IP range — guarding against
+    SSRF if the endpoint is later extended to fetch the URL server-side.
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception:
+        return False
+
+    if parsed.scheme not in {"http", "https"}:
+        return False
+
+    hostname = parsed.hostname or ""
+    if not hostname:
+        return False
+
+    # Reject bare "localhost" regardless of case.
+    if hostname.lower() in {"localhost", "localhost."}:
+        return False
+
+    # Try to parse as an IP address and reject non-global ranges.
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if not addr.is_global:
+            return False
+    except ValueError:
+        # Not a bare IP — domain name; allow it.
+        pass
+
+    return True
+
+
+@app.post("/analyze-thumbnail")
+async def analyze_thumbnail(req: ThumbnailAnalysisRequest) -> dict[str, Any]:
+    """
+    Acknowledge a thumbnail emotion-mosaic analysis request.
+
+    The browser extension performs color-heuristic analysis client-side
+    (using the Canvas API) to build the mosaic.  This endpoint exists to:
+    1. Return a canonical disclaimer and mode tag for the overlay UI.
+    2. Serve as a hook for future TRIBE-based still-image analysis.
+
+    TRIBE v2 is designed for multimodal video; still-image analysis is a
+    color-psychology approximation only.
+    """
+    disclaimer = (
+        "Color-heuristic analysis maps dominant hues in each thumbnail region to "
+        "approximate emotional tones using color-psychology principles. "
+        "This is not a scientific measurement of emotional intent and is not "
+        "produced by TRIBE v2, which requires video + audio input."
+    )
+
+    if not _is_safe_thumbnail_url(req.thumbnail_url):
+        raise HTTPException(
+            status_code=422,
+            detail="thumbnail_url must be a public absolute HTTP(S) URL (private/local addresses are not permitted).",
+        )
+
+    return {
+        "mode": "color-heuristic",
+        "disclaimer": disclaimer,
+        "note": (
+            "Mosaic colors are derived from per-cell dominant hues of the thumbnail image. "
+            "TRIBE v2 video analysis is available separately via /analyze."
+        ),
+        "grid": {"rows": req.grid_rows, "cols": req.grid_cols},
+        "thumbnail_url": req.thumbnail_url,
+    }
 
 
 @app.post("/analyze")

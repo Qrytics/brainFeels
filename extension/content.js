@@ -182,3 +182,280 @@
     ensureToggle();
   }
 })();
+
+// ─── YouTube Thumbnail Emotion Mosaic Overlay ─────────────────────────────────
+(function initMosaic() {
+  const h = location.hostname;
+  if (h !== "www.youtube.com" && h !== "youtube.com" && !h.endsWith(".youtube.com")) return;
+
+  const MOSAIC_ROWS = 3;
+  const MOSAIC_COLS = 4;
+  // Selectors that cover home, search, channel, trending, and shorts shelves.
+  const THUMB_IMG_SELECTOR =
+    "ytd-thumbnail img#img, ytd-thumbnail img.yt-core-image, " +
+    "ytd-playlist-thumbnail img#img, ytd-movie-renderer img#img";
+  const MAX_CONCURRENT = 3;
+
+  const analysisCache = new Map(); // url → mosaic cells[]
+  let inFlight = 0;
+  const waitQueue = []; // {url, resolve} pending concurrency slot
+  let mosaicEnabled = true; // refreshed from storage before first use
+
+  // WeakMap to track per-image src-attribute MutationObservers so they can be
+  // disconnected when the feature is disabled, preventing memory leaks.
+  const imgAttrObservers = new WeakMap();
+
+  // ── Color / emotion helpers ──────────────────────────────────────────────
+
+  function rgbToHsl(r, g, b) {
+    r /= 255;
+    g /= 255;
+    b /= 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const l = (max + min) / 2;
+    let h = 0,
+      s = 0;
+    if (max !== min) {
+      const d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+      else if (max === g) h = ((b - r) / d + 2) / 6;
+      else h = ((r - g) / d + 4) / 6;
+    }
+    return { h: h * 360, s, l };
+  }
+
+  function emotionFromHsl(h, s, l) {
+    if (s < 0.12) {
+      if (l > 0.75) return { name: "calm", color: "#B0BEC5" };
+      if (l < 0.25) return { name: "tension", color: "#455A64" };
+      return { name: "neutral", color: "#90A4AE" };
+    }
+    if (h < 15 || h >= 345) return { name: "excitement", color: "#EF5350" };
+    if (h < 45) return { name: "energy", color: "#FF7043" };
+    if (h < 75) return { name: "happiness", color: "#FFCA28" };
+    if (h < 150) return { name: "calm", color: "#66BB6A" };
+    if (h < 195) return { name: "serenity", color: "#26C6DA" };
+    if (h < 255) return { name: "trust", color: "#42A5F5" };
+    if (h < 300) return { name: "mystery", color: "#AB47BC" };
+    return { name: "excitement", color: "#EC407A" };
+  }
+
+  // ── Concurrency-limited fetch + canvas analysis ──────────────────────────
+
+  function acquireSlot() {
+    return new Promise((resolve) => {
+      if (inFlight < MAX_CONCURRENT) {
+        inFlight++;
+        resolve();
+      } else {
+        waitQueue.push(resolve);
+      }
+    });
+  }
+
+  function releaseSlot() {
+    const next = waitQueue.shift();
+    if (next) {
+      next();
+    } else {
+      inFlight--;
+    }
+  }
+
+  async function fetchAndAnalyze(url) {
+    if (analysisCache.has(url)) return analysisCache.get(url);
+
+    await acquireSlot();
+    try {
+      // Re-check cache after waiting for a slot.
+      if (analysisCache.has(url)) return analysisCache.get(url);
+
+      const resp = await fetch(url, { mode: "cors", credentials: "omit" });
+      if (!resp.ok) return null;
+      const blob = await resp.blob();
+      const bitmap = await createImageBitmap(blob);
+
+      const W = bitmap.width || 320;
+      const H = bitmap.height || 180;
+      const canvas = document.createElement("canvas");
+      canvas.width = W;
+      canvas.height = H;
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(bitmap, 0, 0, W, H);
+      bitmap.close();
+
+      const cellW = Math.floor(W / MOSAIC_COLS);
+      const cellH = Math.floor(H / MOSAIC_ROWS);
+      const cells = [];
+
+      for (let row = 0; row < MOSAIC_ROWS; row++) {
+        for (let col = 0; col < MOSAIC_COLS; col++) {
+          const imgData = ctx.getImageData(col * cellW, row * cellH, cellW, cellH).data;
+          let rSum = 0,
+            gSum = 0,
+            bSum = 0;
+          const pixelCount = imgData.length / 4;
+          for (let i = 0; i < imgData.length; i += 4) {
+            rSum += imgData[i];
+            gSum += imgData[i + 1];
+            bSum += imgData[i + 2];
+          }
+          const { h, s, l } = rgbToHsl(rSum / pixelCount, gSum / pixelCount, bSum / pixelCount);
+          const { name, color } = emotionFromHsl(h, s, l);
+          cells.push({ row, col, emotion: name, color });
+        }
+      }
+
+      analysisCache.set(url, cells);
+      return cells;
+    } catch {
+      return null;
+    } finally {
+      releaseSlot();
+    }
+  }
+
+  // ── Overlay rendering ────────────────────────────────────────────────────
+
+  function renderOverlay(container, cells) {
+    container.querySelector(".brainfeels-mosaic")?.remove();
+
+    const overlay = document.createElement("div");
+    overlay.className = "brainfeels-mosaic";
+    overlay.setAttribute("aria-hidden", "true");
+
+    for (const cell of cells) {
+      const cellEl = document.createElement("div");
+      cellEl.className = "brainfeels-mosaic-cell";
+      cellEl.style.setProperty("--bf-color", cell.color);
+      cellEl.title = cell.emotion;
+      overlay.appendChild(cellEl);
+    }
+
+    // Ensure the parent is positioned so the absolute overlay aligns.
+    const pos = getComputedStyle(container).position;
+    if (pos === "static") container.style.position = "relative";
+
+    container.appendChild(overlay);
+  }
+
+  function removeAllOverlays() {
+    document.querySelectorAll(".brainfeels-mosaic").forEach((el) => el.remove());
+    document.querySelectorAll("[data-bf-src]").forEach((el) => {
+      delete el.dataset.bfSrc;
+    });
+    // Disconnect per-image src attribute observers.
+    document.querySelectorAll(THUMB_IMG_SELECTOR).forEach(disconnectImgObserver);
+  }
+
+  // ── Per-thumbnail processing ─────────────────────────────────────────────
+
+  async function processThumbnail(imgEl) {
+    if (!mosaicEnabled) return;
+    const src = imgEl.src;
+    if (!src || !src.startsWith("http")) return;
+
+    // Walk up to find the best overlay container (prefer ytd-thumbnail).
+    const container =
+      imgEl.closest("ytd-thumbnail") ||
+      imgEl.closest("ytd-playlist-thumbnail") ||
+      imgEl.parentElement;
+    if (!container) return;
+
+    // Skip if already processed for this src.
+    if (container.dataset.bfSrc === src) return;
+    container.dataset.bfSrc = src;
+
+    const cells = await fetchAndAnalyze(src);
+    if (!cells) return;
+    renderOverlay(container, cells);
+  }
+
+  // ── DOM observation ──────────────────────────────────────────────────────
+
+  // IntersectionObserver — only analyse thumbnails entering the viewport.
+  const io = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) processThumbnail(entry.target);
+      });
+    },
+    { rootMargin: "200px 0px" }
+  );
+
+  function observeImg(img) {
+    io.observe(img);
+    // YouTube sets `src` lazily; watch for the attribute being filled.
+    if (imgAttrObservers.has(img)) return; // already watching
+    const attrMo = new MutationObserver(() => {
+      if (img.src && img.src.startsWith("http")) processThumbnail(img);
+    });
+    attrMo.observe(img, { attributes: true, attributeFilter: ["src"] });
+    imgAttrObservers.set(img, attrMo);
+  }
+
+  function disconnectImgObserver(img) {
+    const attrMo = imgAttrObservers.get(img);
+    if (attrMo) {
+      attrMo.disconnect();
+      imgAttrObservers.delete(img);
+    }
+  }
+
+  // MutationObserver — detect newly inserted thumbnail images.
+  const mo = new MutationObserver((mutations) => {
+    if (!mosaicEnabled) return;
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (node.nodeType !== 1) continue;
+        const imgs = node.matches?.(THUMB_IMG_SELECTOR)
+          ? [node]
+          : [...(node.querySelectorAll?.(THUMB_IMG_SELECTOR) ?? [])];
+        imgs.forEach(observeImg);
+      }
+    }
+  });
+
+  // SPA navigation — YouTube uses History API; rescan after URL changes.
+  let lastHref = location.href;
+  new MutationObserver(() => {
+    if (location.href !== lastHref) {
+      lastHref = location.href;
+      // Brief delay to let YouTube render the new page content.
+      setTimeout(scanExisting, 800);
+    }
+  }).observe(document.documentElement, { subtree: true, childList: true });
+
+  function scanExisting() {
+    document.querySelectorAll(THUMB_IMG_SELECTOR).forEach((img) => {
+      observeImg(img);
+      if (img.src && img.src.startsWith("http")) processThumbnail(img);
+    });
+  }
+
+  // ── Startup ──────────────────────────────────────────────────────────────
+
+  chrome.storage.sync.get({ mosaicEnabled: true }, ({ mosaicEnabled: val }) => {
+    mosaicEnabled = val;
+
+    if (mosaicEnabled) {
+      mo.observe(document.body, { childList: true, subtree: true });
+      scanExisting();
+    }
+  });
+
+  // React to the user toggling the setting in the popup.
+  chrome.storage.onChanged.addListener((changes) => {
+    if (!("mosaicEnabled" in changes)) return;
+    mosaicEnabled = changes.mosaicEnabled.newValue;
+    if (mosaicEnabled) {
+      mo.observe(document.body, { childList: true, subtree: true });
+      scanExisting();
+    } else {
+      mo.disconnect();
+      removeAllOverlays();
+    }
+  });
+})();

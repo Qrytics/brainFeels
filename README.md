@@ -27,7 +27,7 @@ brainFeels/
 │   ├── assets/icons/          # PNG icons (16, 32, 48, 128 px)
 │   ├── popup/                 # Settings popup (HTML + JS)
 │   ├── background.js          # Service worker — relays clip to server
-│   ├── content.js             # In-page panel + MediaRecorder
+│   ├── content.js             # In-page panel + MediaRecorder + mosaic overlay
 │   ├── manifest.json
 │   └── styles.css
 ├── server/                    # Local FastAPI server
@@ -74,6 +74,62 @@ Open a **video page**, start playback, click **BrainFeels → Record & analyze**
 
 ---
 
+## YouTube Thumbnail Emotion Mosaic
+
+When browsing YouTube the extension automatically overlays a **color-coded emotion mosaic** on every visible thumbnail.
+
+### How it works
+
+1. A `MutationObserver` and `IntersectionObserver` detect thumbnail `<img>` elements as they appear during scroll, infinite-scroll, and SPA navigation.
+2. Each thumbnail image is fetched with CORS and drawn onto an off-screen `<canvas>`.
+3. The canvas is divided into a **3 × 4 grid**. For each cell the dominant RGB color is mapped to an emotional tone using color-psychology heuristics:
+
+| Color range | Inferred tone |
+|---|---|
+| Red / deep pink | Excitement |
+| Orange | Energy |
+| Yellow | Happiness |
+| Green | Calm |
+| Cyan | Serenity |
+| Blue | Trust |
+| Purple | Mystery |
+| Dark / desaturated | Tension / Neutral |
+
+4. A semi-transparent mosaic overlay (`mix-blend-mode: multiply`) is placed over the thumbnail. The thumbnail image remains clearly visible beneath it.
+5. The overlay opacity increases slightly on hover, and updates whenever a new thumbnail `src` is set (e.g., after YouTube replaces a placeholder).
+
+### Enabling / disabling
+
+Open the **BrainFeels popup** (click the extension icon) and toggle **"YouTube Thumbnail Emotion Mosaic"**. The setting is saved to `chrome.storage.sync` and takes effect immediately — no page reload required.
+
+### Server endpoint
+
+The Python server exposes a lightweight `POST /analyze-thumbnail` endpoint that returns a disclaimer and mode tag for the overlay. The primary color analysis is performed client-side (no round-trips required for the overlay to work).
+
+```
+POST /analyze-thumbnail
+{
+  "thumbnail_url": "https://i.ytimg.com/vi/<video_id>/hqdefault.jpg",
+  "grid_rows": 3,
+  "grid_cols": 4
+}
+```
+
+Response:
+```json
+{
+  "mode": "color-heuristic",
+  "disclaimer": "...",
+  "note": "...",
+  "grid": { "rows": 3, "cols": 4 },
+  "thumbnail_url": "..."
+}
+```
+
+> **Note:** TRIBE v2 is designed for multimodal *video* stimuli. Still-image thumbnail analysis uses color-psychology heuristics only and is an approximation of emotional intent, not a scientific measurement.
+
+---
+
 ## Running the tests
 
 ```bash
@@ -82,7 +138,7 @@ pip install pytest anyio httpx
 pytest tests/ -v
 ```
 
-All tests run in **demo mode** — TRIBE v2 is not required. Expected output: **6 passed**.
+All tests run in **demo mode** — TRIBE v2 is not required. Expected output: **10 passed**.
 
 ---
 
@@ -106,6 +162,7 @@ Environment variables (optional):
 
 - **DRM / capture**: Some streaming sites block `captureStream()`; the recorder needs a normal HTML5 `<video>` playing in the tab.
 - **Message size**: Very long or high-bitrate clips may exceed browser extension message limits — keep the default clip length modest.
+- **Mosaic CORS**: Thumbnails must be served with CORS headers (YouTube's CDN `i.ytimg.com` does this). Sites that omit `Access-Control-Allow-Origin` will cause the canvas read to fail silently — no overlay is shown for those images.
 - **Science & ethics**: Treat outputs as exploratory model behaviour, not diagnostics or emotional truth. Every result includes a disclaimer to this effect.
 
 ---

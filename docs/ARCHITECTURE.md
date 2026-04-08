@@ -85,6 +85,8 @@ TRIBE v2 inference is **excluded** from CI: the model weights are gated on Huggi
 
 ## 3. Data Flow
 
+### 3.1 Video clip analysis (existing)
+
 ```
 User clicks "Record & analyze" (content.js)
         │
@@ -110,6 +112,36 @@ background.js  ──HTTP POST multipart/form-data──►  server/main.py  /an
 content.js renders result panel
 ```
 
+### 3.2 YouTube Thumbnail Emotion Mosaic (new)
+
+```
+YouTube page loads / user scrolls (content.js — YouTube only)
+        │
+        ▼
+MutationObserver detects new <ytd-thumbnail img#img> elements
+IntersectionObserver filters to visible viewport + 200 px margin
+        │
+        ▼
+fetch(thumbnailSrc, {mode:'cors'}) → Blob → createImageBitmap()
+        │
+        ▼
+Off-screen Canvas: divide into 3×4 grid, average RGB per cell
+        │
+        ▼
+Color-heuristic: RGB → HSL → emotion name + color token
+        │
+        ▼
+Render .brainfeels-mosaic overlay div (absolute, mix-blend-mode:multiply)
+over ytd-thumbnail container — thumbnail image remains visible beneath
+        │
+        ▼  (optional, no round-trip required for overlay)
+chrome.runtime.sendMessage({type:"analyze-thumbnail", …})
+        │
+        ▼
+background.js  ──HTTP POST JSON──►  server/main.py  /analyze-thumbnail
+                                         (returns disclaimer + mode tag)
+```
+
 ---
 
 ## 4. Extension Files — Responsibilities
@@ -118,10 +150,10 @@ content.js renders result panel
 |---|---|
 | `manifest.json` | Declares permissions (`storage`, `activeTab`, `scripting`), content-script injection rules, popup, and service worker. |
 | `background.js` | Service worker. Listens for `"analyze"` messages from content script. Reads server URL from `chrome.storage.sync`. Sends `multipart/form-data` POST. Returns parsed JSON or error. |
-| `content.js` | Injected into every page. Creates floating "BrainFeels" button and side panel. Finds `<video>`, calls `captureStream()`, runs `MediaRecorder`, sends ArrayBuffer to background. Renders result HTML. |
-| `styles.css` | All panel/button styles, scoped to `#brainfeels-tribe-*` and `.brainfeels-*` to avoid polluting host page styles. |
-| `popup/popup.html` | Simple settings form. |
-| `popup/popup.js` | Reads/writes `chrome.storage.sync.serverUrl`. |
+| `content.js` | Injected into every page. (1) Creates floating "BrainFeels" button and side panel; finds `<video>`, calls `captureStream()`, runs `MediaRecorder`, sends ArrayBuffer to background. Renders result HTML. (2) On YouTube: detects thumbnail `<img>` elements via `MutationObserver` + `IntersectionObserver`, analyses each thumbnail's dominant colors using the Canvas API, and overlays a color-coded emotion mosaic. |
+| `styles.css` | All panel/button/mosaic styles, scoped to `#brainfeels-tribe-*` and `.brainfeels-*` to avoid polluting host page styles. |
+| `popup/popup.html` | Settings form: server URL + YouTube Mosaic toggle. |
+| `popup/popup.js` | Reads/writes `chrome.storage.sync` keys `serverUrl` and `mosaicEnabled`. |
 | `assets/icons/` | Extension icons (16 px, 48 px, 128 px). |
 
 ---
@@ -130,9 +162,9 @@ content.js renders result panel
 
 | File | Responsibility |
 |---|---|
-| `main.py` | FastAPI app definition. `GET /health`. `POST /analyze` (upload + TRIBE v2 or demo). `_summarize_predictions()` converts vertex arrays to human-readable stats. `_run_tribe()` lazy-imports `tribev2`. |
+| `main.py` | FastAPI app definition. `GET /health`. `POST /analyze` (upload + TRIBE v2 or demo). `POST /analyze-thumbnail` (thumbnail URL validation + color-heuristic disclaimer). `_summarize_predictions()` converts vertex arrays to human-readable stats. `_run_tribe()` lazy-imports `tribev2`. |
 | `requirements.txt` | All runtime dependencies plus dev/test deps in comments. |
-| `tests/test_main.py` | pytest tests: health endpoint, demo mode response shape, 413 file-size guard, unsupported suffix normalisation. |
+| `tests/test_main.py` | pytest tests: health endpoint, demo mode response shape, 413 file-size guard, unsupported suffix normalisation, analyze-thumbnail valid/default/invalid. |
 
 ---
 
