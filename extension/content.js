@@ -204,7 +204,7 @@ function escapeHtml(s) {
 
   async function onAnalyzeYouTube(wrap) {
     setResult(wrap, "");
-    setStatus(wrap, "Fetching video metadata & finding trending segment\u2026");
+    setStatus(wrap, "Fetching trending segment and running fast analysis\u2026");
 
     const _DEFAULT = "http://127.0.0.1:8765";
     let serverUrl;
@@ -219,7 +219,8 @@ function escapeHtml(s) {
       parseInt(wrap.querySelector(".brainfeels-duration").value, 10) || 30));
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15 * 60 * 1000);
+    const timeoutMs = 90 * 60 * 1000;
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     let res;
     try {
@@ -232,7 +233,7 @@ function escapeHtml(s) {
     } catch (e) {
       let errMsg;
       if (e?.name === "AbortError") {
-        errMsg = "Request timed out after 15 minutes.";
+        errMsg = "Request timed out after 90 minutes.";
       } else if (e?.message?.toLowerCase().includes("fetch")) {
         errMsg = `Cannot connect to server — is it running? (python main.py)`;
       } else {

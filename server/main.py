@@ -84,25 +84,100 @@ def _summarize_predictions(preds: np.ndarray) -> dict[str, Any]:
     }
 
 
-def _run_tribe(video_path: Path, cache_folder: Path) -> np.ndarray:
-    """Load TribeModel and return prediction array (n_tr, n_vertices)."""
+def _run_tribe(
+    video_path: Path,
+    cache_folder: Path,
+    include_video_features: bool = True,
+) -> tuple[np.ndarray, str]:
+    """Load TribeModel and return predictions plus feature mode.
+
+    Returns:
+        (preds, feature_mode) where feature_mode is either:
+        - "full": video + audio + text features
+        - "audio_video_only": video + audio features (text disabled fallback)
+        - "audio_only": audio-only features (fast mode)
+    """
     try:
-        from tribev2.demo_utils import TribeModel  # type: ignore
+        from tribev2.demo_utils import TribeModel, get_audio_and_text_events  # type: ignore
+        import pandas as pd
+        import torch
     except ImportError as e:
         raise RuntimeError(
             "TRIBE v2 Python package not found. Install Meta's tribev2 repo "
             "(see README) and dependencies, including PyTorch."
         ) from e
 
+    device_pref = os.environ.get("BRAINFEELS_DEVICE", "auto").strip().lower()
+    if device_pref not in {"auto", "cpu", "cuda"}:
+        device_pref = "auto"
+
+    if device_pref == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "BRAINFEELS_DEVICE=cuda but CUDA is unavailable in this environment. "
+                "Install a CUDA-enabled PyTorch build in server/venv or set BRAINFEELS_DEVICE=cpu."
+            )
+        device = "cuda"
+    elif device_pref == "cpu":
+        device = "cpu"
+    else:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+
     cache_folder.mkdir(parents=True, exist_ok=True)
     model = TribeModel.from_pretrained(
         "facebook/tribev2",
         cache_folder=str(cache_folder),
-        device="auto",
+        device=device,
+        config_update={
+            # Keep extractor devices aligned with the selected runtime device.
+            "data.text_feature.device": device,
+            "data.audio_feature.device": device,
+            "data.image_feature.image.device": device,
+            "data.video_feature.image.device": device,
+        },
     )
-    events = model.get_events_dataframe(video_path=str(video_path))
-    preds, _segments = model.predict(events, verbose=False)
-    return preds
+
+    # WhisperX + text extractor stacks have strict Torch version constraints
+    # that often conflict with TRIBE's pinned Torch versions in local setups.
+    # Default to robust audio+video-only mode; allow opting back into full mode.
+    enable_text = os.environ.get("BRAINFEELS_ENABLE_TEXT", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+    if enable_text and include_video_features:
+        events = model.get_events_dataframe(video_path=str(video_path))
+        try:
+            preds, _segments = model.predict(events, verbose=False)
+            return preds, "full"
+        except Exception as e:
+            logger.warning(
+                "TRIBE full pipeline failed (%s). Falling back to audio+video-only inference.",
+                e,
+            )
+
+    # Fallback: build events without words/text so text extractor is skipped.
+    base_events = pd.DataFrame(
+        [
+            {
+                "type": "Video",
+                "filepath": str(video_path),
+                "start": 0,
+                "timeline": "default",
+                "subject": "default",
+            }
+        ]
+    )
+    events_no_text = get_audio_and_text_events(base_events, audio_only=True)
+    if not include_video_features:
+        # Fast path for long YouTube clips on consumer hardware.
+        events_no_text = events_no_text[events_no_text.type != "Video"]
+        if len(events_no_text) == 0:
+            raise RuntimeError("No audio events available for audio-only inference.")
+    preds, _segments = model.predict(events_no_text, verbose=False)
+    return preds, "audio_video_only" if include_video_features else "audio_only"
 
 
 @app.get("/health")
@@ -211,7 +286,8 @@ async def analyze(file: UploadFile = File(...)) -> dict[str, Any]:
     if suffix not in {".webm", ".mp4", ".mkv", ".mov", ".avi"}:
         suffix = ".webm"
 
-    cache_root = Path(os.environ.get("BRAINFEELS_CACHE", Path(tempfile.gettempdir()) / "brainfeels-cache"))
+    default_cache = Path("C:/bfc") if os.name == "nt" else (Path(tempfile.gettempdir()) / "brainfeels-cache")
+    cache_root = Path(os.environ.get("BRAINFEELS_CACHE", str(default_cache)))
     cache_root.mkdir(parents=True, exist_ok=True)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -234,7 +310,7 @@ async def analyze(file: UploadFile = File(...)) -> dict[str, Any]:
 
     try:
         try:
-            preds = _run_tribe(analysis_path, cache_root / "tribe")
+            preds, feature_mode = _run_tribe(analysis_path, cache_root / "t")
         except RuntimeError as e:
             logger.warning("TRIBE unavailable or failed: %s", e)
             return {
@@ -257,6 +333,7 @@ async def analyze(file: UploadFile = File(...)) -> dict[str, Any]:
             raise HTTPException(status_code=500, detail=f"TRIBE inference failed: {e}") from e
 
         out = _summarize_predictions(preds)
+        out["meta"]["feature_mode"] = feature_mode
         return {
             "mode": "tribe",
             "disclaimer": disclaimer,
@@ -386,10 +463,13 @@ async def analyze_youtube(req: YouTubeAnalysisRequest) -> dict[str, Any]:
             analysis_path = raw_clip
 
         # --- 4. TRIBE inference -------------------------------------------
-        cache_root = Path(os.environ.get("BRAINFEELS_CACHE",
-                          Path(tempfile.gettempdir()) / "brainfeels-cache"))
+        default_cache = Path("C:/bfc") if os.name == "nt" else (Path(tempfile.gettempdir()) / "brainfeels-cache")
+        cache_root = Path(os.environ.get("BRAINFEELS_CACHE", str(default_cache)))
+        cache_root.mkdir(parents=True, exist_ok=True)
         try:
-            preds = await asyncio.to_thread(_run_tribe, analysis_path, cache_root / "tribe")
+            preds, feature_mode = await asyncio.to_thread(
+                _run_tribe, analysis_path, cache_root / "t", False
+            )
         except RuntimeError as e:
             logger.warning("TRIBE unavailable or failed: %s", e)
             return {
@@ -411,6 +491,7 @@ async def analyze_youtube(req: YouTubeAnalysisRequest) -> dict[str, Any]:
             raise HTTPException(status_code=500, detail=f"TRIBE inference failed: {e}") from e
 
         out = _summarize_predictions(preds)
+        out["meta"]["feature_mode"] = feature_mode
         out["meta"]["segment_start_s"] = round(start, 2)
         out["meta"]["segment_end_s"] = round(end, 2)
         out["meta"]["video_title"] = info.get("title", "")
