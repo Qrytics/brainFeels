@@ -3,7 +3,7 @@
   "name": "BrainFeels (TRIBE v2)",
   "version": "0.1.0",
   "description": "Send video clips to a local TRIBE v2 server for predicted cortical responses and an interpretive overview.",
-  "permissions": ["storage", "activeTab", "scripting"],
+  "permissions": ["storage", "activeTab", "scripting", "alarms"],
   "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
   "icons": {
     "16": "assets/icons/icon16.png",

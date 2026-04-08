@@ -25,6 +25,10 @@ function escapeHtml(s) {
         <div class="brainfeels-actions">
           <button type="button" class="brainfeels-record">Record &amp; analyze</button>
         </div>
+        <div class="brainfeels-yt-section" style="display:none">
+          <hr class="brainfeels-divider"/>
+          <button type="button" class="brainfeels-ytanalyze">⚡ Analyze trending moment</button>
+        </div>
         <div class="brainfeels-status" aria-live="polite"></div>
         <div class="brainfeels-result"></div>
       </div>
@@ -36,6 +40,11 @@ function escapeHtml(s) {
     });
 
     wrap.querySelector(".brainfeels-record").addEventListener("click", () => onRecord(wrap));
+    wrap.querySelector(".brainfeels-ytanalyze").addEventListener("click", () => onAnalyzeYouTube(wrap));
+    const _bfh = location.hostname;
+    if (_bfh === "www.youtube.com" || _bfh === "youtube.com" || _bfh.endsWith(".youtube.com")) {
+      wrap.querySelector(".brainfeels-yt-section").style.display = "";
+    }
   }
 
   function setStatus(wrap, text, isError) {
@@ -105,33 +114,64 @@ function escapeHtml(s) {
       return;
     }
 
-    setStatus(wrap, "Uploading to local BrainFeels server…");
-    const buf = await blob.arrayBuffer();
-    chrome.runtime.sendMessage(
-      {
-        type: "analyze",
-        buffer: buf,
-        mimeType: blob.type,
-        filename: "clip.webm",
-      },
-      (resp) => {
-        if (chrome.runtime.lastError) {
-          setStatus(wrap, chrome.runtime.lastError.message, true);
-          return;
-        }
-        if (!resp?.ok) {
-          const err =
-            resp?.error ||
-            resp?.data?.detail ||
-            resp?.data?.error ||
-            JSON.stringify(resp?.data || resp);
-          setStatus(wrap, "Server error: " + err, true);
-          return;
-        }
-        setStatus(wrap, "Done.");
-        renderResult(wrap, resp.data);
+    setStatus(wrap, "Uploading & running TRIBE inference… this can take several minutes on CPU.");
+
+    // Fetch the server URL from storage, then POST directly from the content
+    // script. This avoids routing through the MV3 service worker, which Chrome
+    // can kill after ~30 s–5 min and would leave the UI permanently stuck.
+    const DEFAULT_SERVER = "http://127.0.0.1:8765";
+    let serverUrl;
+    try {
+      const stored = await chrome.storage.sync.get({ serverUrl: DEFAULT_SERVER });
+      serverUrl = (stored.serverUrl || DEFAULT_SERVER).replace(/\/$/, "");
+    } catch {
+      serverUrl = DEFAULT_SERVER;
+    }
+
+    const form = new FormData();
+    form.append("file", blob, "clip.webm");
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15 * 60 * 1000);
+
+    let res;
+    try {
+      res = await fetch(`${serverUrl}/analyze`, {
+        method: "POST",
+        body: form,
+        signal: controller.signal,
+      });
+    } catch (e) {
+      let errMsg;
+      if (e?.name === "AbortError") {
+        errMsg = "Request timed out after 15 minutes.";
+      } else if (e?.message?.toLowerCase().includes("fetch")) {
+        errMsg = `Cannot connect to server — is it running? (python main.py)`;
+      } else {
+        errMsg = e?.message || String(e);
       }
-    );
+      setStatus(wrap, "Upload failed: " + errMsg, true);
+      return;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { error: text || `HTTP ${res.status}` };
+    }
+
+    if (!res.ok) {
+      const err = data?.detail || data?.error || JSON.stringify(data);
+      setStatus(wrap, "Server error: " + err, true);
+      return;
+    }
+
+    setStatus(wrap, "Done.");
+    renderResult(wrap, data);
   }
 
   function renderResult(wrap, data) {
@@ -160,6 +200,64 @@ function escapeHtml(s) {
        }
        ${meta}`
     );
+  }
+
+  async function onAnalyzeYouTube(wrap) {
+    setResult(wrap, "");
+    setStatus(wrap, "Fetching video metadata & finding trending segment\u2026");
+
+    const _DEFAULT = "http://127.0.0.1:8765";
+    let serverUrl;
+    try {
+      const stored = await chrome.storage.sync.get({ serverUrl: _DEFAULT });
+      serverUrl = (stored.serverUrl || _DEFAULT).replace(/\/$/,  "");
+    } catch {
+      serverUrl = _DEFAULT;
+    }
+
+    const clipSec = Math.min(120, Math.max(10,
+      parseInt(wrap.querySelector(".brainfeels-duration").value, 10) || 30));
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15 * 60 * 1000);
+
+    let res;
+    try {
+      res = await fetch(`${serverUrl}/analyze-youtube`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: location.href, clip_seconds: clipSec }),
+        signal: controller.signal,
+      });
+    } catch (e) {
+      let errMsg;
+      if (e?.name === "AbortError") {
+        errMsg = "Request timed out after 15 minutes.";
+      } else if (e?.message?.toLowerCase().includes("fetch")) {
+        errMsg = `Cannot connect to server — is it running? (python main.py)`;
+      } else {
+        errMsg = e?.message || String(e);
+      }
+      setStatus(wrap, "Failed: " + errMsg, true);
+      return;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    const text = await res.text();
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { error: text || `HTTP ${res.status}` };
+    }
+    if (!res.ok) {
+      const err = data?.detail || data?.error || JSON.stringify(data);
+      setStatus(wrap, "Server error: " + err, true);
+      return;
+    }
+    setStatus(wrap, "Done.");
+    renderResult(wrap, data);
   }
 
   function ensureToggle() {

@@ -2,6 +2,7 @@ fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 python-multipart>=0.0.9
 numpy>=1.24.0
+yt-dlp>=2024.1.0
 
 # Dev / CI dependencies (install with: pip install -r requirements.txt ruff mypy pytest anyio httpx)
 # pytest>=8.0
