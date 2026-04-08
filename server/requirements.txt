@@ -1,0 +1,7 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
+numpy>=1.24.0
+
+# Optional: install Meta's tribev2 from GitHub and its stack (PyTorch, etc.) — see README.
+# tribev2 is not on PyPI as a simple pip name; clone https://github.com/facebookresearch/tribev2
