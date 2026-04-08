@@ -1,0 +1,27 @@
+{
+  "name": "brainfeels-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "BrainFeels Chrome extension — dev tooling only (no build step required).",
+  "scripts": {
+    "lint": "eslint background.js content.js popup/popup.js",
+    "test": "jest"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.24.0",
+    "eslint": "^9.24.0",
+    "globals": "^16.0.0",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
+    "jest-webextension-mock": "^3.8.9"
+  },
+  "jest": {
+    "testEnvironment": "jsdom",
+    "setupFiles": [
+      "jest-webextension-mock"
+    ],
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ]
+  }
+}

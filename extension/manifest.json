@@ -5,9 +5,21 @@
   "description": "Send video clips to a local TRIBE v2 server for predicted cortical responses and an interpretive overview.",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "icons": {
+    "16": "assets/icons/icon16.png",
+    "32": "assets/icons/icon32.png",
+    "48": "assets/icons/icon48.png",
+    "128": "assets/icons/icon128.png"
+  },
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "BrainFeels"
+    "default_title": "BrainFeels",
+    "default_icon": {
+      "16": "assets/icons/icon16.png",
+      "32": "assets/icons/icon32.png",
+      "48": "assets/icons/icon48.png",
+      "128": "assets/icons/icon128.png"
+    }
   },
   "background": {
     "service_worker": "background.js"

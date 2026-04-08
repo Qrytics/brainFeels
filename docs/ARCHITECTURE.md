@@ -10,7 +10,7 @@
 brainFeels/
 ├── .github/
 │   └── workflows/
-│       └── ci.yml              # Lint + unit-test pipeline (no TRIBE inference)
+│       └── ci.yml              # Lint + unit-test pipeline (Python + JS)
 ├── docs/
 │   ├── ARCHITECTURE.md         # This file
 │   ├── PRD.md                  # Product Requirements Document
@@ -21,13 +21,20 @@ brainFeels/
 │   ├── popup/
 │   │   ├── popup.html          # Settings / server-URL popup
 │   │   └── popup.js            # Popup logic
+│   ├── tests/
+│   │   ├── background.test.js  # Jest: background service worker tests
+│   │   └── content.test.js     # Jest: escapeHtml + duration clamping tests
 │   ├── background.js           # Service worker: relays clip to local server
-│   ├── content.js              # In-page panel + MediaRecorder logic
-│   ├── manifest.json           # MV3 manifest
-│   └── styles.css              # Scoped panel/button CSS
+│   ├── content.js              # In-page panel + MediaRecorder + mosaic overlay
+│   ├── eslint.config.js        # ESLint 9 flat config
+│   ├── manifest.json           # MV3 manifest (icons, permissions, CSP)
+│   ├── package.json            # ESLint + Jest dev dependencies
+│   ├── package-lock.json       # Locked dependency tree for npm ci
+│   └── styles.css              # Scoped panel/button/mosaic CSS
 ├── server/                     # Local Python FastAPI server
 │   ├── tests/
-│   │   └── test_main.py        # pytest unit + integration tests
+│   │   ├── conftest.py         # pytest fixtures (anyio backend)
+│   │   └── test_main.py        # 10 pytest tests: health, analyze, thumbnail
 │   ├── main.py                 # FastAPI app + TRIBE v2 wrapper
 │   └── requirements.txt        # Runtime + dev dependencies
 ├── .gitignore
@@ -40,7 +47,9 @@ brainFeels/
 
 ### 2.1 `extension/` is self-contained
 
-The extension directory is loaded directly as an unpacked Chrome extension (no build step required in the current version). All JS is vanilla ES2022 modules. A future migration to TypeScript / esbuild would output a `dist/` folder inside `extension/`; the source would move to `extension/src/`.
+The extension directory is loaded directly as an unpacked Chrome extension (no build step required). All JS is vanilla ES2022. Dev tooling (`package.json`, `eslint.config.js`, `tests/`, `node_modules/`) lives alongside the extension files but is not referenced by `manifest.json` and is therefore invisible to Chrome.
+
+A future migration to TypeScript / esbuild would output a `dist/` folder; the source would move to `extension/src/`.
 
 ### 2.2 `server/` is a standalone Python package
 
@@ -70,14 +79,20 @@ All architectural, product, and stack decisions live in `docs/`. Files here are 
 
 ### 2.4 Assets
 
-Extension icons follow Chrome's naming convention (`icon16.png`, `icon48.png`, `icon128.png`). The placeholder directory `extension/assets/icons/` is tracked in Git with a `.gitkeep` so the path exists in fresh clones before icons are added.
+Extension icons are 16 × 16, 32 × 32, 48 × 48, and 128 × 128 px solid-colour PNGs (BrainFeels purple, `#3d5afe`). They are declared under both `"icons"` and `"action.default_icon"` in `manifest.json` for full Chrome Web Store compatibility.
 
 ### 2.5 CI / CD
 
-`.github/workflows/ci.yml` runs on every push and pull request:
-1. **Python linting** – Ruff (style) + mypy (types).
-2. **Python tests** – pytest in demo mode (TRIBE v2 not installed in CI).
-3. **JavaScript linting** – ESLint when a `package.json` is present.
+`.github/workflows/ci.yml` runs on every push and pull request in two parallel jobs:
+
+**`python-checks`**
+1. Ruff (style + lint)
+2. mypy (strict type checking)
+3. pytest (demo mode — TRIBE v2 not installed in CI)
+
+**`js-checks`**
+1. ESLint (flat config, `extension/`)
+2. Jest (13 unit tests — no browser or TRIBE v2 needed)
 
 TRIBE v2 inference is **excluded** from CI: the model weights are gated on Hugging Face, require tens of GBs of disk space, and need PyTorch which is too heavy for standard GitHub-hosted runners.
 
@@ -85,7 +100,7 @@ TRIBE v2 inference is **excluded** from CI: the model weights are gated on Huggi
 
 ## 3. Data Flow
 
-### 3.1 Video clip analysis (existing)
+### 3.1 Video clip analysis (MVP — current)
 
 ```
 User clicks "Record & analyze" (content.js)
@@ -110,6 +125,7 @@ background.js  ──HTTP POST multipart/form-data──►  server/main.py  /an
         │
         ▼
 content.js renders result panel
+(disclaimer + brain summary + emotion overview + meta JSON block)
 ```
 
 ### 3.2 YouTube Thumbnail Emotion Mosaic (new)
@@ -133,13 +149,6 @@ Color-heuristic: RGB → HSL → emotion name + color token
         ▼
 Render .brainfeels-mosaic overlay div (absolute, mix-blend-mode:multiply)
 over ytd-thumbnail container — thumbnail image remains visible beneath
-        │
-        ▼  (optional, no round-trip required for overlay)
-chrome.runtime.sendMessage({type:"analyze-thumbnail", …})
-        │
-        ▼
-background.js  ──HTTP POST JSON──►  server/main.py  /analyze-thumbnail
-                                         (returns disclaimer + mode tag)
 ```
 
 ---
@@ -148,13 +157,16 @@ background.js  ──HTTP POST JSON──►  server/main.py  /analyze-thumbnail
 
 | File | Responsibility |
 |---|---|
-| `manifest.json` | Declares permissions (`storage`, `activeTab`, `scripting`), content-script injection rules, popup, and service worker. |
-| `background.js` | Service worker. Listens for `"analyze"` messages from content script. Reads server URL from `chrome.storage.sync`. Sends `multipart/form-data` POST. Returns parsed JSON or error. |
-| `content.js` | Injected into every page. (1) Creates floating "BrainFeels" button and side panel; finds `<video>`, calls `captureStream()`, runs `MediaRecorder`, sends ArrayBuffer to background. Renders result HTML. (2) On YouTube: detects thumbnail `<img>` elements via `MutationObserver` + `IntersectionObserver`, analyses each thumbnail's dominant colors using the Canvas API, and overlays a color-coded emotion mosaic. |
+| `manifest.json` | Declares permissions (`storage`, `activeTab`, `scripting`), content-script injection rules, popup, service worker, and extension icons. |
+| `background.js` | Service worker. Listens for `"analyze"` messages from content script. Reads server URL from `chrome.storage.sync`. Sends `multipart/form-data` POST. Returns parsed JSON or error object. |
+| `content.js` | Injected into every page. (1) Defines `escapeHtml` at module scope (exported for tests). Creates floating "BrainFeels" button and side panel; finds `<video>`, calls `captureStream()`, runs `MediaRecorder`, sends ArrayBuffer to background, and renders the result. (2) On YouTube only: detects thumbnail `<img>` elements via `MutationObserver` + `IntersectionObserver`, analyses each thumbnail's dominant colours using the Canvas API, and overlays a colour-coded emotion mosaic. |
 | `styles.css` | All panel/button/mosaic styles, scoped to `#brainfeels-tribe-*` and `.brainfeels-*` to avoid polluting host page styles. |
 | `popup/popup.html` | Settings form: server URL + YouTube Mosaic toggle. |
 | `popup/popup.js` | Reads/writes `chrome.storage.sync` keys `serverUrl` and `mosaicEnabled`. |
-| `assets/icons/` | Extension icons (16 px, 48 px, 128 px). |
+| `assets/icons/` | Extension icons (16, 32, 48, 128 px). Declared in `manifest.json` under `"icons"` and `"action.default_icon"`. |
+| `eslint.config.js` | ESLint 9 flat config — ES2022, browser + webextension globals, `no-unused-vars` with `_`-prefix exception. |
+| `package.json` | Dev dependencies: ESLint 9, Jest 29, jest-webextension-mock. Scripts: `npm run lint` and `npm test`. |
+| `tests/` | Jest unit tests: background message/fetch handling; `escapeHtml`; duration clamping. |
 
 ---
 
@@ -162,13 +174,74 @@ background.js  ──HTTP POST JSON──►  server/main.py  /analyze-thumbnail
 
 | File | Responsibility |
 |---|---|
-| `main.py` | FastAPI app definition. `GET /health`. `POST /analyze` (upload + TRIBE v2 or demo). `POST /analyze-thumbnail` (thumbnail URL validation + color-heuristic disclaimer). `_summarize_predictions()` converts vertex arrays to human-readable stats. `_run_tribe()` lazy-imports `tribev2`. |
-| `requirements.txt` | All runtime dependencies plus dev/test deps in comments. |
-| `tests/test_main.py` | pytest tests: health endpoint, demo mode response shape, 413 file-size guard, unsupported suffix normalisation, analyze-thumbnail valid/default/invalid. |
+| `main.py` | FastAPI app definition. `GET /health`. `POST /analyze` (upload → TRIBE v2 or demo mode). `POST /analyze-thumbnail` (URL validation + color-heuristic disclaimer). `_summarize_predictions()` converts vertex arrays to human-readable stats. `_run_tribe()` lazy-imports `tribev2`. `_is_safe_thumbnail_url()` guards against SSRF. Environment-variable configuration for host, port, and cache directory. |
+| `requirements.txt` | Runtime dependencies plus dev/test deps in comments. |
+| `tests/conftest.py` | Shared pytest fixture (`anyio_backend`). |
+| `tests/test_main.py` | 10 pytest tests: health endpoint, demo mode response shape, 413 file-size guard, unsupported suffix normalisation, `_summarize_predictions` valid/bad shapes, analyze-thumbnail valid/default/invalid/SSRF. |
 
 ---
 
-## 6. Future Additions (not yet implemented)
+## 6. API Contract
+
+### `GET /health`
+
+```json
+{ "status": "ok" }
+```
+
+### `POST /analyze`
+
+**Request:** `multipart/form-data`, field `file` — a video file ≤ 120 MB.
+
+**Response (tribe mode):**
+```json
+{
+  "mode": "tribe",
+  "disclaimer": "<string>",
+  "brain_summary": "<string>",
+  "emotion_overview": "<string>",
+  "meta": {
+    "n_time_segments": 42,
+    "n_vertices": 20484,
+    "mean_abs_pred": 0.0312,
+    "mean_spatial_std_per_tr": 0.0118,
+    "mean_temporal_std_per_vertex": 0.0094
+  }
+}
+```
+
+**Response (demo mode — TRIBE v2 not installed):**
+```json
+{
+  "mode": "demo",
+  "disclaimer": "<string>",
+  "brain_summary": "<string>",
+  "emotion_overview": "<string>",
+  "meta": { "error": "<string>" }
+}
+```
+
+### `POST /analyze-thumbnail`
+
+**Request body (JSON):**
+```json
+{ "thumbnail_url": "https://...", "grid_rows": 3, "grid_cols": 4 }
+```
+
+**Response:**
+```json
+{
+  "mode": "color-heuristic",
+  "disclaimer": "<string>",
+  "note": "<string>",
+  "grid": { "rows": 3, "cols": 4 },
+  "thumbnail_url": "<string>"
+}
+```
+
+---
+
+## 7. Future Additions (not yet implemented)
 
 | Path | Purpose |
 |---|---|

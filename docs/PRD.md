@@ -241,10 +241,10 @@ The MVP is considered **complete** when ALL of the following are true:
 - [x] The panel renders results without JS console errors on YouTube and a generic HTML5 video page.
 - [x] The extension loads successfully in Chrome 120+ without manifest errors.
 - [x] `pytest server/tests/test_main.py` passes with 0 failures (demo mode only — no TRIBE needed).
-- [ ] ESLint runs with 0 errors on `extension/` (when `package.json` + ESLint config are added).
-- [ ] Ruff + mypy pass on `server/`.
-- [ ] README describes setup clearly enough for a non-developer to follow.
-- [ ] Every rendered result contains the scientific disclaimer.
+- [x] ESLint runs with 0 errors on `extension/` (`package.json` + ESLint 9 flat config added; `npm run lint` passes).
+- [x] Ruff + mypy pass on `server/`.
+- [x] README describes setup clearly enough for a non-developer to follow.
+- [x] Every rendered result contains the scientific disclaimer.
 
 ---
 
@@ -289,12 +289,12 @@ on: [push, pull_request]
 jobs:
   python-checks:
     - ruff check server/
-    - mypy server/main.py
+    - mypy server/main.py --ignore-missing-imports
     - pytest server/tests/ -v
 
-  js-checks:   (when package.json exists)
-    - eslint extension/
-    - jest
+  js-checks:
+    - eslint background.js content.js popup/popup.js   # npm run lint
+    - jest --no-coverage                                # npm test
 ```
 
 ---
