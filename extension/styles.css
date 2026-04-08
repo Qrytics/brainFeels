@@ -139,3 +139,30 @@
   overflow: auto;
   max-height: 160px;
 }
+
+/* ── YouTube Thumbnail Emotion Mosaic Overlay ─────────────────────────────── */
+
+.brainfeels-mosaic {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
+  pointer-events: none;
+  opacity: 0.45;
+  transition: opacity 0.2s ease;
+  border-radius: inherit;
+  overflow: hidden;
+  z-index: 5;
+}
+
+/* Show at slightly higher opacity when the user hovers the card. */
+ytd-thumbnail:hover .brainfeels-mosaic,
+ytd-playlist-thumbnail:hover .brainfeels-mosaic {
+  opacity: 0.65;
+}
+
+.brainfeels-mosaic-cell {
+  background-color: var(--bf-color, #90A4AE);
+  mix-blend-mode: multiply;
+}

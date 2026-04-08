@@ -136,3 +136,70 @@ def test_summarize_predictions_bad_shape():
     preds_1d = np.array([1.0, 2.0, 3.0])
     with pytest.raises(ValueError):
         _summarize_predictions(preds_1d)
+
+
+# ---------------------------------------------------------------------------
+# /analyze-thumbnail — demo / color-heuristic mode
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_analyze_thumbnail_valid():
+    """/analyze-thumbnail returns mode='color-heuristic' for a valid HTTPS URL."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/analyze-thumbnail",
+            json={
+                "thumbnail_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+                "grid_rows": 3,
+                "grid_cols": 4,
+            },
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["mode"] == "color-heuristic"
+    assert "disclaimer" in body
+    assert "note" in body
+    assert body["grid"] == {"rows": 3, "cols": 4}
+    assert "thumbnail_url" in body
+
+
+@pytest.mark.anyio
+async def test_analyze_thumbnail_default_grid():
+    """/analyze-thumbnail uses default grid 3×4 when omitted."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/analyze-thumbnail",
+            json={"thumbnail_url": "https://example.com/thumb.jpg"},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["grid"] == {"rows": 3, "cols": 4}
+
+
+@pytest.mark.anyio
+async def test_analyze_thumbnail_invalid_url():
+    """/analyze-thumbnail rejects non-HTTP URLs with 422."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            "/analyze-thumbnail",
+            json={"thumbnail_url": "javascript:alert(1)"},
+        )
+    assert resp.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_analyze_thumbnail_rejects_localhost():
+    """/analyze-thumbnail rejects localhost URLs to prevent SSRF."""
+    for bad_url in [
+        "http://localhost/thumb.jpg",
+        "http://127.0.0.1/thumb.jpg",
+        "http://192.168.1.1/thumb.jpg",
+        "http://10.0.0.1/thumb.jpg",
+        "http://169.254.169.254/latest/meta-data/",
+    ]:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post(
+                "/analyze-thumbnail",
+                json={"thumbnail_url": bad_url},
+            )
+        assert resp.status_code == 422, f"Expected 422 for {bad_url}, got {resp.status_code}"
