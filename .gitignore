@@ -6,3 +6,6 @@ venv/
 *.webm
 *.mp4
 .DS_Store
+.pytest_cache/
+node_modules/
+dist/
