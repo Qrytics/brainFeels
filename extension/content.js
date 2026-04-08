@@ -1,3 +1,10 @@
+// Exported for unit tests (ignored by the browser; module is undefined there).
+function escapeHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+
 (function () {
   const PANEL_ID = "brainfeels-tribe-panel";
   const BTN_ID = "brainfeels-tribe-toggle";
@@ -125,12 +132,6 @@
         renderResult(wrap, resp.data);
       }
     );
-  }
-
-  function escapeHtml(s) {
-    const d = document.createElement("div");
-    d.textContent = s;
-    return d.innerHTML;
   }
 
   function renderResult(wrap, data) {
@@ -459,3 +460,7 @@
     }
   });
 })();
+
+// Export utilities for Jest unit tests.
+// `module` is undefined in the browser so this line is a no-op there.
+if (typeof module !== "undefined") module.exports = { escapeHtml };
