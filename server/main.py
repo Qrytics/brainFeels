@@ -10,7 +10,7 @@ import pathlib
 import platform
 
 if platform.system() == "Windows":
-    pathlib.PosixPath = pathlib.WindowsPath
+    pathlib.PosixPath = pathlib.WindowsPath  # type: ignore[misc, assignment]
 
 import asyncio
 import ipaddress

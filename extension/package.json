@@ -18,7 +18,8 @@
   "jest": {
     "testEnvironment": "jsdom",
     "setupFiles": [
-      "jest-webextension-mock"
+      "jest-webextension-mock",
+      "./jest.setup.js"
     ],
     "testMatch": [
       "**/tests/**/*.test.js"
